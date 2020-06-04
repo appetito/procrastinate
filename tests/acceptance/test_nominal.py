@@ -86,34 +86,44 @@ def test_lock(defer, running_worker):
     not started before the first one was finished.
     """
 
-    defer(
-        "sleep_and_write",
-        ["--lock", "a"],
-        sleep=0.5,
-        write_before="before-1",
-        write_after="after-1",
-    )
-    defer(
-        "sleep_and_write",
-        ["--lock", "a"],
-        sleep=0.001,
-        write_before="before-2",
-        write_after="after-2",
-    )
-    # Run the 2 workers concurrently
-    process1 = running_worker(name="worker1")
-    process2 = running_worker(name="worker2")
-    time.sleep(2)
+    NUM_JOBS = NUM_WORKERS = 50
+
+    for i in range(NUM_JOBS):
+        defer(
+            "sleep_and_write",
+            ["--lock", "a"],
+            sleep=0.001,
+            write_before="before-{}".format(i),
+            write_after="after-{}".format(i),
+        )
+
+    processes = []
+    for i in range(NUM_WORKERS):
+        print("spawn process {}".format(i))
+        process = running_worker(name="worker".format(i))
+        processes.append(process)
+
+    time.sleep(20)
+
     # And stop them
-    process1.send_signal(signal.SIGINT)
-    process2.send_signal(signal.SIGINT)
+    for i, process in enumerate(processes):
+        print("kill process {}".format(i))
+        process.send_signal(signal.SIGINT)
 
     # Gather their stdout
-    stdout1, stderr1 = process1.communicate()
-    print(stderr1)
-    stdout2, stderr2 = process2.communicate()
-    print(stderr2)
-    stdout = stdout1 + stdout2
+    stdouts = []
+    stderrs = []
+    for i, process in enumerate(processes):
+        print("gather process {} input".format(i))
+        stdout, stderr = process.communicate()
+        stdouts.append(stdout)
+        stderrs.append(stderr)
+
+    stdout = "".join(stdouts)
+    stderr = "".join(stderrs)
+
+    print(stdout)
+    print(stderr)
 
     # Sort the interesting lines by timestamp to reconstitute a consistent view
     lines = dict(
@@ -122,7 +132,12 @@ def test_lock(defer, running_worker):
     lines = sorted(lines, key=lines.get)
 
     # Check that it all happened in order
-    assert lines == ["before-1", "after-1", "before-2", "after-2"]
+    expected = []
+    for i in range(NUM_JOBS):
+        expected.extend(["before-{}".format(i), "after-{}".format(i)])
+
+    print(lines)
+    assert lines == expected
     # If locks didnt work, we would have
     # ["before-1", "before-2", "after-2", "after-1"]
 
